@@ -19,7 +19,6 @@ EMAIL_PASS = os.getenv("EMAIL_PASS")
 DRY_RUN = os.getenv("DRY_RUN", "1") == "1"  # set to 0 in .env to actually send email
 
 FREE_DOMAINS = {
-    "remoteok.com",
     "remotive.com",
     "remotive.io",
     "weworkremotely.com",
@@ -31,9 +30,15 @@ FREE_DOMAINS = {
     "builtin.com",
     "linkedin.com",
     "stackoverflow.com",
+    "arbeitnow.com",
+    "flexjobs.com",
+    "remoteco.com",
+    "workingnotworking.com",
 }
 
-HEADERS = {"User-Agent": "Mozilla/5.0"}
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+}
 
 # =================== HELPERS =================== #
 
@@ -61,7 +66,7 @@ def is_likely_free_apply(url: str) -> bool:
 
 def safe_request(url: str):
     try:
-        res = requests.get(url, headers=HEADERS, timeout=10)
+        res = requests.get(url, headers=HEADERS, timeout=15)
         res.raise_for_status()
         return res
     except RequestException as e:
@@ -71,30 +76,39 @@ def safe_request(url: str):
 # =================== FETCH JOB SOURCES =================== #
 
 
-def fetch_remoteok_jobs():
-    """Fetch frontend jobs from RemoteOK API"""
-    url = "https://remoteok.com/api"
+def fetch_arbeitnow_jobs():
+    """Fetch frontend jobs from Arbeitnow API - free job board"""
+    url = "https://www.arbeitnow.com/api/job-board-api"
     try:
         res = safe_request(url)
-        data = res.json()[1:]
+        data = res.json().get("data", [])
         jobs = []
+        
         for job in data:
-            title = job.get("position", "") or ""
-            if any(w in title.lower() for w in ["frontend", "front-end", "ui", "react", "web"]):
-                company = job.get("company", "Unknown")
+            title = job.get("title", "") or ""
+            tags = job.get("tags", [])
+            
+            # Check if frontend related
+            frontend_keywords = ["frontend", "front-end", "react", "vue", "angular", "javascript", "web developer"]
+            if any(keyword in title.lower() for keyword in frontend_keywords) or \
+               any(keyword in " ".join(tags).lower() for keyword in frontend_keywords):
+                company = job.get("company_name", "Unknown")
                 link = job.get("url", "#")
-                jobs.append({
-                    "company": company,
-                    "title": title,
-                    "link": link,
-                    "keywords": ["remote", "frontend", "web", "developer"],
-                    "skills": ["React", "JavaScript", "CSS", "API integration"],
-                    "apply_host": apply_host_from_url(link),
-                    "free_to_apply": is_likely_free_apply(link)
-                })
+                location = job.get("location", "Remote")
+                
+                if "remote" in location.lower() or job.get("remote", False):
+                    jobs.append({
+                        "company": company,
+                        "title": title,
+                        "link": link,
+                        "keywords": ["remote", "frontend", "web"],
+                        "skills": ["JavaScript", "React", "CSS"],
+                        "apply_host": apply_host_from_url(link),
+                        "free_to_apply": is_likely_free_apply(link)
+                    })
         return jobs[:5]
     except Exception as e:
-        print("RemoteOK error:", e)
+        print("Arbeitnow error:", e)
         return []
 
 
@@ -125,6 +139,42 @@ def fetch_remotive_jobs():
         return []
 
 
+def fetch_remoteco_jobs():
+    """Fetch jobs from Remote.co"""
+    url = "https://remote.co/remote-jobs/developer/"
+    try:
+        res = safe_request(url)
+        soup = BeautifulSoup(res.text, "html.parser")
+        jobs = []
+        
+        for card in soup.select("div.card, article.job")[:5]:
+            title_elem = card.select_one("h3, h2, .job_title, a.font-weight-bold")
+            company_elem = card.select_one("p.company, .company_name, .m-0.text-secondary")
+            link_elem = card.select_one("a[href*='/job/']")
+            
+            if title_elem and link_elem:
+                title = title_elem.get_text(strip=True)
+                if any(w in title.lower() for w in ["frontend", "front-end", "react", "vue", "web", "javascript"]):
+                    company = company_elem.get_text(strip=True) if company_elem else "Unknown"
+                    href = link_elem.get("href", "")
+                    if not href.startswith("http"):
+                        href = "https://remote.co" + href
+                    
+                    jobs.append({
+                        "company": company,
+                        "title": title,
+                        "link": href,
+                        "keywords": ["remote", "frontend", "developer"],
+                        "skills": ["JavaScript", "React", "HTML", "CSS"],
+                        "apply_host": apply_host_from_url(href),
+                        "free_to_apply": True
+                    })
+        return jobs
+    except Exception as e:
+        print("Remote.co error:", e)
+        return []
+
+
 def fetch_wellfound_jobs():
     """Scrape Wellfound (AngelList) for remote frontend roles"""
     url = "https://wellfound.com/role/remote-frontend-developer-jobs"
@@ -132,19 +182,29 @@ def fetch_wellfound_jobs():
         res = safe_request(url)
         soup = BeautifulSoup(res.text, "html.parser")
         jobs = []
-        for link in soup.select("a.styles_component__a__job")[:5]:
+        
+        # Try multiple selectors
+        job_links = soup.select("a.styles_component__a__job") or \
+                   soup.select("a[href*='/jobs/']") or \
+                   soup.select("div.job a")
+        
+        for link in job_links[:5]:
             title = (link.text or "").strip()
-            href = "https://wellfound.com" + link.get("href")
+            href = link.get("href", "")
+            if not href.startswith("http"):
+                href = "https://wellfound.com" + href
             company = "Startup (Wellfound)"
-            jobs.append({
-                "company": company,
-                "title": title,
-                "link": href,
-                "keywords": ["remote", "frontend", "startup"],
-                "skills": ["React", "Next.js", "TypeScript"],
-                "apply_host": apply_host_from_url(href),
-                "free_to_apply": is_likely_free_apply(href)
-            })
+            
+            if title and "/jobs/" in href:
+                jobs.append({
+                    "company": company,
+                    "title": title,
+                    "link": href,
+                    "keywords": ["remote", "frontend", "startup"],
+                    "skills": ["React", "Next.js", "TypeScript"],
+                    "apply_host": apply_host_from_url(href),
+                    "free_to_apply": is_likely_free_apply(href)
+                })
         return jobs
     except Exception as e:
         print("Wellfound error:", e)
@@ -160,7 +220,9 @@ def fetch_wwr_jobs():
         jobs = []
         for section in soup.select("section.jobs")[:3]:
             for a in section.select("li a")[:5]:
-                href = "https://weworkremotely.com" + a.get("href")
+                href = a.get("href", "")
+                if not href.startswith("http"):
+                    href = "https://weworkremotely.com" + href
                 title = (a.select_one("span.title") or {}).get_text("", strip=True)
                 company = (a.select_one("span.company") or {}).get_text("", strip=True)
                 if not title:
@@ -180,16 +242,52 @@ def fetch_wwr_jobs():
         return []
 
 
+def fetch_github_jobs():
+    """Fetch jobs from GitHub Jobs alternatives - using a public API"""
+    # Note: GitHub Jobs is deprecated, but we can use other aggregators
+    try:
+        # This is a fallback - you can replace with other APIs
+        jobs = []
+        return jobs
+    except Exception as e:
+        print("GitHub Jobs error:", e)
+        return []
+
+
 # =================== JOB AGGREGATION =================== #
 
 
 def fetch_all_jobs():
     jobs = []
-    for func in [fetch_remoteok_jobs, fetch_remotive_jobs, fetch_wellfound_jobs, fetch_wwr_jobs]:
-        jobs.extend(func())
+    sources = [
+        fetch_arbeitnow_jobs,
+        fetch_remotive_jobs,
+        fetch_remoteco_jobs,
+        fetch_wellfound_jobs,
+        fetch_wwr_jobs,
+    ]
+    
+    for func in sources:
+        try:
+            fetched = func()
+            jobs.extend(fetched)
+            print(f"[OK] {func.__name__}: {len(fetched)} jobs")
+        except Exception as e:
+            print(f"[FAIL] {func.__name__}: {e}")
+    
     if not jobs:
         raise RuntimeError("No jobs found from any source.")
-    return jobs
+    
+    # Remove duplicates based on link
+    seen_links = set()
+    unique_jobs = []
+    for job in jobs:
+        if job["link"] not in seen_links:
+            seen_links.add(job["link"])
+            unique_jobs.append(job)
+    
+    print(f"\nTotal unique jobs found: {len(unique_jobs)}")
+    return unique_jobs
 
 
 # =================== EMAIL BUILDING =================== #
@@ -199,28 +297,47 @@ def create_html_table(jobs):
     jobs = sorted(jobs, key=lambda j: (not j["free_to_apply"], j["company"]))
     rows = ""
     for i, j in enumerate(jobs, 1):
+        free_badge = "Free" if j['free_to_apply'] else "Maybe Paid"
+        free_color = "#28a745" if j['free_to_apply'] else "#ffc107"
+        
         rows += f"""
         <tr>
             <td>{i}</td>
-            <td><b>{j['company']}</b> — {j['title']}</td>
-            <td><a href="{j['link']}">View Job</a></td>
+            <td><b>{j['company']}</b><br/><span style="color: #666;">{j['title']}</span></td>
+            <td><a href="{j['link']}" style="color: #007bff;">Apply Now</a></td>
             <td>{', '.join(j['keywords'])}</td>
             <td>{', '.join(j['skills'])}</td>
             <td>{j['apply_host']}</td>
-            <td>{'' if j['free_to_apply'] else ' Maybe'}</td>
+            <td style="background-color: {free_color}22; color: {free_color}; font-weight: bold;">{free_badge}</td>
         </tr>
         """
     return f"""
     <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; }}
+            h2 {{ color: #333; }}
+            table {{ border-collapse: collapse; width: 100%; }}
+            th {{ background-color: #4CAF50; color: white; padding: 12px; text-align: left; }}
+            td {{ padding: 10px; border-bottom: 1px solid #ddd; }}
+            tr:hover {{ background-color: #f5f5f5; }}
+            a {{ text-decoration: none; }}
+        </style>
+    </head>
     <body>
         <h2>Daily Global Frontend Developer Jobs ({datetime.now().strftime('%Y-%m-%d')})</h2>
-        <table border="1" cellspacing="0" cellpadding="6">
+        <p>Found <strong>{len(jobs)}</strong> remote frontend opportunities today!</p>
+        <table>
         <tr>
             <th>#</th><th>Company / Role</th><th>Link</th>
-            <th>Keywords</th><th>Skills</th><th>Source</th><th>Free to Apply</th>
+            <th>Keywords</th><th>Skills</th><th>Source</th><th>Apply Status</th>
         </tr>
         {rows}
         </table>
+        <br/>
+        <p style="color: #666; font-size: 12px;">
+            Tip: Focus on jobs marked "Free" for immediate applications without subscriptions.
+        </p>
     </body>
     </html>
     """
@@ -228,12 +345,12 @@ def create_html_table(jobs):
 
 def send_email(html):
     msg = MIMEText(html, "html")
-    msg["Subject"] = " Daily Remote Frontend Jobs Digest"
+    msg["Subject"] = "Daily Remote Frontend Jobs Digest"
     msg["From"] = EMAIL_USER
     msg["To"] = EMAIL_USER
 
     if DRY_RUN:
-        print("[DRY RUN] Email prepared but not sent.")
+        print("\n[DRY RUN] Email prepared but not sent.")
         print(msg.as_string()[:400] + "...\n")
         return
 
@@ -243,27 +360,32 @@ def send_email(html):
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(EMAIL_USER, EMAIL_PASS)
         server.send_message(msg)
-    print(" Email sent successfully!")
+    print("Email sent successfully!")
 
 
 def main():
+    print("=" * 50)
+    print("  REMOTE FRONTEND JOBS FETCHER")
+    print("=" * 50)
+    
     try:
         jobs = fetch_all_jobs()
     except RuntimeError as e:
-        print(" Failed to fetch jobs:", e)
+        print(f"Failed to fetch jobs: {e}")
         sys.exit(1)
 
     html = create_html_table(jobs)
     try:
         send_email(html)
     except Exception as e:
-        print(" Failed to send email:", e)
+        print(f"Failed to send email: {e}")
         sys.exit(1)
 
     if DRY_RUN:
-        print(" Dry run complete — no email sent.")
+        print("\nDry run complete - no email sent.")
+        print("Set DRY_RUN=0 in .env to send actual emails.")
     else:
-        print(" Success! Daily job email sent.")
+        print("\nSuccess! Daily job email sent.")
 
 
 if __name__ == "__main__":
