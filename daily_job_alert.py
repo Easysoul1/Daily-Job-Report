@@ -39,7 +39,7 @@ FREE_DOMAINS = {
 }
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
 }
 
 # =================== HELPERS =================== #
@@ -79,7 +79,7 @@ def is_likely_free_apply(url: str) -> bool:
 
 def safe_request(url: str):
     try:
-        res = requests.get(url, headers=HEADERS, timeout=15)
+        res = requests.get(url, headers=HEADERS, timeout=30)
         res.raise_for_status()
         return res
     except RequestException as e:
@@ -152,77 +152,71 @@ def fetch_remotive_jobs():
         return []
 
 
-def fetch_remoteco_jobs():
-    """Fetch jobs from Remote.co"""
-    url = "https://remote.co/remote-jobs/developer/"
+
+
+
+
+
+def fetch_remoteok_jobs():
+    """Fetch jobs from Remote OK"""
+    url = "https://remoteok.io/remote-frontend-jobs"
     try:
         res = safe_request(url)
         soup = BeautifulSoup(res.text, "html.parser")
         jobs = []
-        
-        for card in soup.select("div.card, article.job")[:5]:
-            title_elem = card.select_one("h3, h2, .job_title, a.font-weight-bold")
-            company_elem = card.select_one("p.company, .company_name, .m-0.text-secondary")
-            link_elem = card.select_one("a[href*='/job/']")
-            
-            if title_elem and link_elem:
+        for job in soup.select(".job")[:5]:
+            title_elem = job.select_one("h2")
+            company_elem = job.select_one("h3")
+            link_elem = job.select_one("a.preventLink")
+
+            if title_elem and company_elem and link_elem:
                 title = title_elem.get_text(strip=True)
-                if any(w in title.lower() for w in ["frontend", "front-end", "react", "vue", "web", "javascript"]):
-                    company = company_elem.get_text(strip=True) if company_elem else "Unknown"
-                    href = link_elem.get("href", "")
-                    if not href.startswith("http"):
-                        href = "https://remote.co" + href
-                    
-                    jobs.append({
-                        "company": company,
-                        "title": title,
-                        "link": href,
-                        "keywords": ["remote", "frontend", "developer"],
-                        "skills": ["JavaScript", "React", "HTML", "CSS"],
-                        "apply_host": apply_host_from_url(href),
-                        "free_to_apply": True
-                    })
-        return jobs
-    except Exception as e:
-        print("Remote.co error:", e)
-        return []
+                company = company_elem.get_text(strip=True)
+                link = link_elem['href']
+                if not link.startswith("http"):
+                    link = "https://remoteok.io" + link
 
-
-def fetch_wellfound_jobs():
-    """Scrape Wellfound (AngelList) for remote frontend roles"""
-    url = "https://wellfound.com/role/remote-frontend-developer-jobs"
-    try:
-        res = safe_request(url)
-        soup = BeautifulSoup(res.text, "html.parser")
-        jobs = []
-        
-        # Try multiple selectors
-        job_links = soup.select("a.styles_component__a__job") or \
-                   soup.select("a[href*='/jobs/']") or \
-                   soup.select("div.job a")
-        
-        for link in job_links[:5]:
-            title = (link.text or "").strip()
-            href = link.get("href", "")
-            if not href.startswith("http"):
-                href = "https://wellfound.com" + href
-            company = "Startup (Wellfound)"
-            
-            if title and "/jobs/" in href:
                 jobs.append({
                     "company": company,
                     "title": title,
-                    "link": href,
-                    "keywords": ["remote", "frontend", "startup"],
-                    "skills": ["React", "Next.js", "TypeScript"],
-                    "apply_host": apply_host_from_url(href),
-                    "free_to_apply": is_likely_free_apply(href)
+                    "link": link,
+                    "keywords": ["remote", "frontend", "developer"],
+                    "skills": ["JavaScript", "React", "HTML", "CSS"],
+                    "apply_host": apply_host_from_url(link),
+                    "free_to_apply": is_likely_free_apply(link)
                 })
         return jobs
     except Exception as e:
-        print("Wellfound error:", e)
+        print("Remote OK error:", e)
         return []
 
+def fetch_jsjobbs_jobs():
+    """Fetch jobs from JSJobbs.com"""
+    url = "https://jsjobbs.com/jobs/remote"
+    try:
+        res = safe_request(url)
+        soup = BeautifulSoup(res.text, "html.parser")
+        jobs = []
+        for job in soup.select(".job-card")[:5]:
+            title = job.select_one(".job-title").get_text(strip=True)
+            company = job.select_one(".company-name").get_text(strip=True)
+            link = job.select_one("a")['href']
+            if not link.startswith("http"):
+                link = "https://jsjobbs.com" + link
+
+            jobs.append({
+                "company": company,
+                "title": title,
+                "link": link,
+                "keywords": ["remote", "frontend", "javascript"],
+                "skills": ["JavaScript", "React", "Vue", "Angular"],
+                "apply_host": apply_host_from_url(link),
+                "free_to_apply": is_likely_free_apply(link)
+            })
+        return jobs
+    except Exception as e:
+        print("JSJobbs error:", e)
+        return []
 
 def fetch_wwr_jobs():
     """Fetch jobs from WeWorkRemotely"""
@@ -236,8 +230,10 @@ def fetch_wwr_jobs():
                 href = a.get("href", "")
                 if not href.startswith("http"):
                     href = "https://weworkremotely.com" + href
-                title = (a.select_one("span.title") or {}).get_text("", strip=True)
-                company = (a.select_one("span.company") or {}).get_text("", strip=True)
+                title_elem = a.select_one("span.title")
+                company_elem = a.select_one("span.company")
+                title = title_elem.get_text("", strip=True) if title_elem else ""
+                company = company_elem.get_text("", strip=True) if company_elem else ""
                 if not title:
                     continue
                 jobs.append({
@@ -255,45 +251,10 @@ def fetch_wwr_jobs():
         return []
 
 
-def fetch_stackoverflow_jobs():
-    """Fetch jobs from Stack Overflow Jobs"""
-    url = "https://stackoverflow.com/jobs?r=true&q=frontend"
-    try:
-        res = safe_request(url)
-        soup = BeautifulSoup(res.text, "html.parser")
-        jobs = []
-        for job in soup.select(".-job-summary")[:5]:
-            title = job.select_one(".-title").get_text(strip=True)
-            company = job.select_one(".-company").get_text(strip=True)
-            link = job.select_one("a.-job-summary-title")['href']
-            if not link.startswith("http"):
-                link = "https://stackoverflow.com" + link
-
-            jobs.append({
-                "company": company,
-                "title": title,
-                "link": link,
-                "keywords": ["remote", "frontend", "developer"],
-                "skills": ["JavaScript", "React", "HTML", "CSS"],
-                "apply_host": apply_host_from_url(link),
-                "free_to_apply": is_likely_free_apply(link)
-            })
-        return jobs
-    except Exception as e:
-        print("Stack Overflow error:", e)
-        return []
 
 
-def fetch_github_jobs():
-    """Fetch jobs from GitHub Jobs alternatives - using a public API"""
-    # Note: GitHub Jobs is deprecated, but we can use other aggregators
-    try:
-        # This is a fallback - you can replace with other APIs
-        jobs = []
-        return jobs
-    except Exception as e:
-        print("GitHub Jobs error:", e)
-        return []
+
+
 
 
 # =================== JOB AGGREGATION =================== #
@@ -304,10 +265,9 @@ def fetch_all_jobs(seen_jobs: set):
     sources = [
         fetch_arbeitnow_jobs,
         fetch_remotive_jobs,
-        fetch_remoteco_jobs,
-        fetch_wellfound_jobs,
         fetch_wwr_jobs,
-        fetch_stackoverflow_jobs,
+        fetch_jsjobbs_jobs,
+        fetch_remoteok_jobs,
     ]
     
     for func in sources:
