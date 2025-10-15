@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import smtplib
 from datetime import datetime
 from urllib.parse import urlparse
@@ -14,6 +15,7 @@ from requests.exceptions import RequestException
 
 load_dotenv()
 
+SEEN_JOBS_FILE = "seen_jobs.json"
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
 DRY_RUN = os.getenv("DRY_RUN", "1") == "1"  # set to 0 in .env to actually send email
@@ -42,6 +44,17 @@ HEADERS = {
 
 # =================== HELPERS =================== #
 
+
+def save_seen_jobs(links: set):
+    with open(SEEN_JOBS_FILE, "w") as f:
+        json.dump(list(links), f)
+
+def load_seen_jobs() -> set:
+    try:
+        with open(SEEN_JOBS_FILE, "r") as f:
+            return set(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return set()
 
 def apply_host_from_url(url: str) -> str:
     try:
@@ -242,6 +255,35 @@ def fetch_wwr_jobs():
         return []
 
 
+def fetch_stackoverflow_jobs():
+    """Fetch jobs from Stack Overflow Jobs"""
+    url = "https://stackoverflow.com/jobs?r=true&q=frontend"
+    try:
+        res = safe_request(url)
+        soup = BeautifulSoup(res.text, "html.parser")
+        jobs = []
+        for job in soup.select(".-job-summary")[:5]:
+            title = job.select_one(".-title").get_text(strip=True)
+            company = job.select_one(".-company").get_text(strip=True)
+            link = job.select_one("a.-job-summary-title")['href']
+            if not link.startswith("http"):
+                link = "https://stackoverflow.com" + link
+
+            jobs.append({
+                "company": company,
+                "title": title,
+                "link": link,
+                "keywords": ["remote", "frontend", "developer"],
+                "skills": ["JavaScript", "React", "HTML", "CSS"],
+                "apply_host": apply_host_from_url(link),
+                "free_to_apply": is_likely_free_apply(link)
+            })
+        return jobs
+    except Exception as e:
+        print("Stack Overflow error:", e)
+        return []
+
+
 def fetch_github_jobs():
     """Fetch jobs from GitHub Jobs alternatives - using a public API"""
     # Note: GitHub Jobs is deprecated, but we can use other aggregators
@@ -257,7 +299,7 @@ def fetch_github_jobs():
 # =================== JOB AGGREGATION =================== #
 
 
-def fetch_all_jobs():
+def fetch_all_jobs(seen_jobs: set):
     jobs = []
     sources = [
         fetch_arbeitnow_jobs,
@@ -265,6 +307,7 @@ def fetch_all_jobs():
         fetch_remoteco_jobs,
         fetch_wellfound_jobs,
         fetch_wwr_jobs,
+        fetch_stackoverflow_jobs,
     ]
     
     for func in sources:
@@ -278,11 +321,11 @@ def fetch_all_jobs():
     if not jobs:
         raise RuntimeError("No jobs found from any source.")
     
-    # Remove duplicates based on link
+    # Remove duplicates and seen jobs
     seen_links = set()
     unique_jobs = []
     for job in jobs:
-        if job["link"] not in seen_links:
+        if job["link"] not in seen_links and job["link"] not in seen_jobs:
             seen_links.add(job["link"])
             unique_jobs.append(job)
     
@@ -367,12 +410,20 @@ def main():
     print("=" * 50)
     print("  REMOTE FRONTEND JOBS FETCHER")
     print("=" * 50)
+
+    seen_jobs = load_seen_jobs()
+    print(f"Loaded {len(seen_jobs)} previously seen jobs.")
     
     try:
-        jobs = fetch_all_jobs()
+        jobs = fetch_all_jobs(seen_jobs)
     except RuntimeError as e:
         print(f"Failed to fetch jobs: {e}")
         sys.exit(1)
+
+
+    if not jobs:
+        print("No new jobs found today.")
+        return
 
     html = create_html_table(jobs)
     try:
@@ -380,6 +431,12 @@ def main():
     except Exception as e:
         print(f"Failed to send email: {e}")
         sys.exit(1)
+
+    # Update seen jobs
+    new_links = {job["link"] for job in jobs}
+    seen_jobs.update(new_links)
+    save_seen_jobs(seen_jobs)
+    print(f"Saved {len(seen_jobs)} seen jobs.")
 
     if DRY_RUN:
         print("\nDry run complete - no email sent.")
