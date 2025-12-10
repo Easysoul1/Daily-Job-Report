@@ -20,8 +20,8 @@ This script automates the process of finding and reporting remote frontend devel
 
 1.  **Clone the repository:**
     ```bash
-    git clone <repository-url>
-    cd <repository-directory>
+    git clone https://github.com/Easysoul1/Daily-Job-Report.git
+    cd Daily-Job-Report
     ```
 
 3.  **Create a `.env` file:**
